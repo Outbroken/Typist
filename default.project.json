@@ -1,0 +1,12 @@
+{
+  "name": "Typist",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Typist": {
+        "$path": "src"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+-# Revamp the Wrapper (doing!)
+    - Dynamic wrapping (done!)
+    - Relative scaling for text
+    - Support for mixed font sizes (done!)
+    - maybe: support for non-monospace fonts (done!)
+
+
+
+-# Revamp the Animator
+    - Handle time simulation (for consistency with skipping)
+    - Support keyframe animations
+    - More control with character animations
+    - More write-on effects
