@@ -1,34 +1,28 @@
 --!strict
 
---[[
-@Description:
-Converts strings into useable character data
+-->>--------------------------------------------<<--
+-- @Created: September 6th, 2025
+-- @Authors: Outbroken
 
-@Created: 9/6/25
-@Modified: 9/6/25
-]]
+-- @Description:
+-- Wraps and positions text
+-->>--------------------------------------------<<--
+
 -- >> Core Services <<
 
 local TextService = game:GetService("TextService")
 
 -- >> References : Modules <<
 
-local _CharacterTypes = require(script.Parent.Parent.Types)
-type CharacterStyle = _CharacterTypes.CharacterStyle
-type Character = _CharacterTypes.Character
-
--- >> Types <<
-
-type Tag = {
-	Content: string,
-	Start: number,
-	End: number,
-}
+local _Types = require(script.Parent.Parent.Types)
+type WriterPreset = _Types.WriterPreset
+type Character = _Types.Character
+type CharacterTransform = _Types.CharacterTransform
 
 -- >> Functions <<
 
 --[[
-@Overview: 
+@Overview:
 Converts a string into a set of Characters, without searching for tags
 
 @Inputs:
@@ -37,7 +31,7 @@ Converts a string into a set of Characters, without searching for tags
 @Output:
 <Character[]> a set of characters
 ]]
-local function wrapTextToLines(characters: { Character }, TextData: {}, maxWidth: number): { { Character } }
+local function wrapTextToLines(characters: { Character }, maxWidth: number, fontData: {}): { { Character } }
 	-- Break characters into words
 	local Words = { {} }
 	local wordIndex = 1
@@ -60,7 +54,7 @@ local function wrapTextToLines(characters: { Character }, TextData: {}, maxWidth
 
 	local textBoundParams = Instance.new("GetTextBoundsParams")
 	textBoundParams.Text = ""
-	textBoundParams.Font = TextData.Font
+	textBoundParams.Font = fontData.Font
 	textBoundParams.Size = 0
 	textBoundParams.Width = 10000
 
@@ -69,7 +63,12 @@ local function wrapTextToLines(characters: { Character }, TextData: {}, maxWidth
 		local wordWidth = 0
 		for _, character in pairs(word) do
 			textBoundParams.Text = character.Value
-			textBoundParams.Size = character.Properties.Size or TextData.FontSize
+
+			if character.Properties.Size then
+				textBoundParams.Size = fontData.FontSize * (1 + (character.Properties.Size / 100))
+			else
+				textBoundParams.Size = fontData.FontSize
+			end
 
 			local characterSize = TextService:GetTextBoundsAsync(textBoundParams)
 			wordWidth += (characterSize.X * 2)
@@ -102,34 +101,55 @@ end
 
 local Wrapper = {}
 
-function Wrapper.CalculateTransforms(Characters: { Character }, TextData: {}, ContainerSize: Vector2): { UDim2 }
+function Wrapper.CalculateTransforms(
+	characters: { Character },
+	Container: Instance,
+	activePreset: WriterPreset
+): { CharacterTransform }
+	local processedFontSize = activePreset.FontSize
+
+	if activePreset.AutoResizeFont then
+		local screenHeight = workspace.CurrentCamera.ViewportSize.Y
+		processedFontSize = activePreset.FontSize * (screenHeight / 563)
+	end
+
+	local containerSize = Container.AbsoluteSize
+	local useableContainerWidth = containerSize.X - (processedFontSize * 2)
+
 	-- Wrap text to lines
-	local textLines = wrapTextToLines(Characters, TextData, ContainerSize.X - (TextData.FontSize * 2))
+	local textLines =
+		wrapTextToLines(characters, useableContainerWidth, { Font = activePreset.Font, FontSize = processedFontSize })
 
 	-- Calculate positions
 	local characterTransforms = {}
 	local absoluteIndex = 1
 
-	local offsetX = TextData.FontSize
-	local offsetY = TextData.FontSize
+	local offsetX = processedFontSize
+	local offsetY = processedFontSize
 	local currentLineHeight = 0
 
 	local textBoundParams = Instance.new("GetTextBoundsParams")
 	textBoundParams.Text = ""
-	textBoundParams.Font = TextData.Font
+	textBoundParams.Font = activePreset.Font
 	textBoundParams.Size = 0
 	textBoundParams.Width = 10000
 
 	for lineIndex = 1, #textLines, 1 do
 		currentLineHeight = 0
-		offsetX = TextData.FontSize
+		offsetX = processedFontSize
 
 		-- Iterate through each character in the line
 		for characterIndex = 1, #textLines[lineIndex], 1 do
-			local character = Characters[absoluteIndex]
+			local character = characters[absoluteIndex]
 
 			textBoundParams.Text = character.Value
-			textBoundParams.Size = character.Properties.Size or TextData.FontSize
+
+			if character.Properties.Size then
+				textBoundParams.Size = processedFontSize * (1 + (character.Properties.Size / 100))
+			else
+				textBoundParams.Size = processedFontSize
+			end
+
 			local characterSize = TextService:GetTextBoundsAsync(textBoundParams)
 
 			if characterSize.Y > currentLineHeight then

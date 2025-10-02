@@ -58,11 +58,10 @@ function Style.Apply(character: TextLabel, styleProperties: StyleProperties, Ani
 					EasingStyle = colorProperties.Easing,
 					EasingDirection = Enum.EasingDirection.In,
 				}
-
 				currentTime += colorProperties.Duration / #styleKeyframes
 			end
 
-			Animator:addAnimation({
+			Animator:AddAnimation({
 				Object = character,
 				Repeat = true,
 				Keyframes = animatorKeyframes,

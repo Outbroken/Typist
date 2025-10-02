@@ -11,25 +11,20 @@
 -- https://mit-license.org
 -->>--------------------------------------------<<--
 
+-- TODO: Maintain character position in animation while being adjusted for container size
+
 -- >> Core Services <<
 
-local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 
 -- >> References : Modules <<
 
-local RichText = require(script.Features.RichText)
-local Wrapper = require(script.Features.Wrapper)
-local Animator = require(script.Features.Animator)
-local Audio = require(script.Features.Audio)
+local RichText = require(script.Components.RichText)
+local Wrapper = require(script.Components.Wrapper)
+local Audio = require(script.Components.Audio)
 
+local Animator = require(script.Components.Animator)
 local Signal = require(script.Packages.GoodSignal)
-
-local Styles = {}
-for _, styleModule in pairs(script.Features.RichText.Styles:GetChildren()) do
-	local style = require(styleModule)
-	Styles[style.TagName] = style
-end
 
 local Presets = {}
 for _, presetModule in pairs(script.Presets:GetChildren()) do
@@ -39,13 +34,12 @@ end
 
 -- >> References : Types <<
 
-local _CharacterTypes = require(script.Types)
-type CharacterProperties = _CharacterTypes.CharacterProperties
-type Character = _CharacterTypes.Character
+local T_Types = require(script.Types)
+type CharacterProperties = T_Types.CharacterProperties
+--type Character = T_Types.Character
 
-local _WriterTypes = require(script.Types)
-type WriterExitState = _WriterTypes.WriterExitState
-type WriterSettings = _WriterTypes.WriterSettings
+type WriterExitState = T_Types.WriterExitState
+type WriterPreset = T_Types.WriterPreset
 
 -- >> Constants <<
 
@@ -65,18 +59,13 @@ local currentWriterIndex = 0
 
 -- >> Functions : Utility <<
 
-local function overridePreset(preset, override)
-	local overridenPreset = {}
-
-	for propertyName, propertyValue in pairs(preset) do
-		overridenPreset[propertyName] = override[propertyName] or propertyValue
-	end
-
-	return overridenPreset
-end
-
 -- >> Module : Core <<
 
+--[=[
+	@class Writer
+
+	The main typewriter class.
+]=]
 local Writer = {}
 Writer.__index = Writer
 
@@ -86,7 +75,7 @@ export type WriterClass = typeof(setmetatable(
 		onFlagActivate: () -> number,
 		onDestroy: () -> (),
 
-		_writerThread: thread?,
+		_Thread: thread?,
 		_isWriting: boolean,
 		_isSkipped: boolean,
 
@@ -113,16 +102,59 @@ export type WriterClass = typeof(setmetatable(
 
 	@return WriterClass -- a new writer object
 ]]
-function Writer.new(Preset: WriterPreset): WriterClass
+function Writer.new(): WriterClass
+	-- #region OBJ_DOC
+	--[=[
+		A unique number to identify the Writer.
+
+		@prop Id number
+		@within Writer
+		@readonly
+	]=]
+
+	--[=[
+		An internal property that contains the mount state of the Writer.
+
+		@prop _isMounted boolean
+		@within Writer
+		@private
+	]=]
+
+	--[=[
+		An internal property that contains the writing state of the Writer.
+
+		@prop _isWriting boolean
+		@within Writer
+		@private
+	]=]
+
+	--[=[
+		An internal property that contains the skipping state of the Writer.
+
+		@prop _isSkipped boolean
+		@within Writer
+		@private
+	]=]
+
+	--[=[
+		An internal property that contains the pause state of the Writer.
+
+		@prop _isPaused boolean
+		@within Writer
+		@private
+	]=]
+
+	-- #endregion
+
 	currentWriterIndex += 1
 
-	return setmetatable({
+	local WriterData = {
 		-- >> Core <<
 		Id = currentWriterIndex,
-		Container = nil,
+		Mount = nil,
 
 		-- >> Internal / State <<
-		_isInitialized = false,
+		_isMounted = false,
 		_isWriting = false,
 		_isSkipped = false,
 		_isPaused = false,
@@ -131,7 +163,7 @@ function Writer.new(Preset: WriterPreset): WriterClass
 		_Animator = Animator.new(),
 
 		-- >> Internal <<
-		_writerThread = nil,
+		_Thread = nil,
 		_activeCharacters = {},
 		_activeTransforms = {},
 
@@ -141,13 +173,15 @@ function Writer.new(Preset: WriterPreset): WriterClass
 		_lastContainerResizeTime = -1,
 
 		-- >> Settings <<
-		Settings = overridePreset(Presets._default, Presets[Preset] or Presets._default),
+		activePreset = Presets._default,
 
 		-- >> Callback Events <<
 		onWriterComplete = Signal.new(),
 		onFlagActivate = Signal.new(),
 		onDestroy = Signal.new(),
-	}, Writer)
+	}
+
+	return setmetatable(WriterData, Writer)
 end
 
 --[[
@@ -160,19 +194,19 @@ Initializes the writer
 @Output:
 Returns true if the action was successful
 ]]
-function Writer:Init(Container: Instance): boolean
+function Writer:Mount(mount: Instance): boolean
 	-- Safety checks
-	if typeof(Container) ~= "Instance" then
-		warn(`Could not initialize writer! {typeof(Container)} is not a valid container type.`)
+	if typeof(mount) ~= "Instance" then
+		warn(`Could not initialize writer! {typeof(mount)} is not a valid container type.`)
 		return false
 	end
-	self.Container = Container
+	self.Mount = mount
 
 	-- Set up the container
-	if not self.Container:FindFirstChild("_Characters") then
+	if not self.Mount:FindFirstChild("_Characters") then
 		local newCharactersFolder = Instance.new("Folder")
 		newCharactersFolder.Name = "_Characters"
-		newCharactersFolder.Parent = self.Container
+		newCharactersFolder.Parent = self.Mount
 	end
 
 	-- Initialize the update cycle
@@ -196,13 +230,15 @@ Called every frame, syncs animations
 - deltaTime: time passed since the last frame
 ]]
 function Writer:_Update(deltaTime: number)
-	if os.clock() - self._lastContainerResizeTime > 0.25 and self.Container.AbsoluteSize ~= self._lastContainerSize then
+	if os.clock() - self._lastContainerResizeTime > 0.25 and self.Mount.AbsoluteSize ~= self._lastContainerSize then
 		self:_ContainerResized()
 		self._lastContainerResizeTime = os.clock()
-		self._lastContainerSize = self.Container.AbsoluteSize
+		self._lastContainerSize = self.Mount.AbsoluteSize
 	end
 
-	self._Animator:Update(deltaTime)
+	if not self._isPaused then
+		self._Animator:Update(deltaTime)
+	end
 end
 
 --[[
@@ -211,121 +247,52 @@ Recalcuates transforms to match with the new container size
 ]]
 function Writer:_ContainerResized()
 	-- Calculate new transforms
-	local newTransforms = Wrapper.CalculateTransforms(self._activeCharacters, {
-		FontSize = self.Settings.FontSize,
-		Font = self.Settings.Font,
-	}, self.Container.AbsoluteSize)
+	local newTransforms = Wrapper.CalculateTransforms(self._activeCharacters, self.Mount, self.activePreset)
 
 	-- Update already written characters
 	for index, character in pairs(self._activeCharacters) do
-		if not character.Instance then
-			break
+		if not character.Model then
+			continue
 		end
 
+		character.Transform = newTransforms[index]
+		character:UpdatePosition(self._Animator, newTransforms[index])
+
+		--[[
 		TweenService:Create(
 			character.Instance,
 			TweenInfo.new(0.15, Enum.EasingStyle.Sine),
 			{ Position = newTransforms[index].Position }
-		):Play()
+		):Play()]]
 	end
 
-	-- Update characters that will be written
+	--self._Animator:Update(0)
+
 	self._activeTransforms = newTransforms
 end
 
---[[
-@Description:
-Writes a character to the container
-
-@Inputs:
-- character: The character to write
-- characterTransform: the position data for the character
-- skipped: whether the writer is being skipped
-
-@Output:
-Returns the newly created character instance
-]]
-function Writer:_WriteCharacter(character: Character, characterTransform: {}, skipped: boolean): Instance
-	local Properties = character.Properties
-	local newCharacter = nil
-
-	if character.Properties.Image then
-		newCharacter = Instance.new("ImageLabel")
-		newCharacter.BackgroundTransparency = 1
-		newCharacter.ScaleType = Enum.ScaleType.Fit
-		newCharacter.Image = "rbxassetid://" .. character.Properties.Image.Id
-
-		-- Set the remaining static properties
-		newCharacter.Size = characterTransform.Size
-		newCharacter.Name = characterTransform.AbsoluteIndex
-		newCharacter.Parent = self.Container._Characters
-	else
-		-- Create the character with a few initial settings
-		newCharacter = Instance.new("TextLabel")
-		newCharacter.BorderSizePixel = 0
-		newCharacter.BackgroundTransparency = 1
-		newCharacter.TextStrokeColor3 = Color3.new(0, 0, 0)
-		newCharacter.TextStrokeTransparency = 1
-		newCharacter.TextScaled = true
-		newCharacter.TextColor3 = Color3.new(1, 1, 1)
-		newCharacter.FontFace = self.Settings.Font
-		newCharacter.Text = character.Value
-
-		-- Style Tags
-		for styleName, styleContent in pairs(Properties.Styles) do
-			Styles[styleName].Apply(newCharacter, styleContent, self._Animator)
-		end
-
-		-- Set the remaining static properties
-		newCharacter.Size = characterTransform.Size
-		newCharacter.Name = characterTransform.AbsoluteIndex
-		newCharacter.Parent = self.Container._Characters
-
-		-- Tag: Mood
-		if Properties.AnimationName then
-			newCharacter.Position = characterTransform.Position
-			Animator.PlayMoodAnimation(Properties.AnimationName, newCharacter)
-
-			return newCharacter
-		end
-	end
-
-	-- If skipped, don't play the write-on animation
-	if skipped == true then
-		newCharacter.Position = characterTransform.Position
-		return newCharacter
-	end
-
-	-- Play the write on animation
-	self._Animator:addAnimation({
-		Object = newCharacter,
-		Keyframes = {
-			{
-				Properties = {
-					Position = characterTransform.Position - UDim2.fromOffset(0, newCharacter.Size.Y.Offset / 2),
-				},
-			},
-			{
-				Time = 0.15,
-				EasingStyle = Enum.EasingStyle.Linear,
-				EasingDirection = Enum.EasingDirection.Out,
-				Properties = { Position = characterTransform.Position },
-			},
-		},
-	})
-	self._Animator:Update(0)
-	--[[
-	Animator.PlayWriteOnAnimation(
-		self.Settings.WritingAnimation,
-		newCharacter,
-		characterTransform.Position,
-		1 / self.Settings.WritingSpeed
-	)]]
-
-	return newCharacter
-end
-
 -- >> Module : Properties <<
+
+--[=[
+	Loads a **Preset** to the writer.
+
+	@param Preset WriterPreset -- The preset to load
+	@param Overwrite boolean -- If true, overrides the current preset instead
+]=]
+function Writer:LoadPreset(Preset: WriterPreset, Overwrite: boolean)
+	-- The preset to use as a fallback for missing values
+	local basePreset = Presets._default
+
+	-- If overwrite is true, overwrite the current preset instead of the default
+	if Overwrite then
+		basePreset = self.activePreset
+	end
+
+	-- Load the preset
+	for currentProperty, currentValue in pairs(basePreset) do
+		self.activePreset[currentProperty] = Preset[currentProperty] or currentValue
+	end
+end
 
 --[[
 @Overview:
@@ -453,7 +420,7 @@ end
 	@param Text string -- Text for the writer to write, parsed by default.
 	@return boolean -- Writer successfully started writing
 ]]
-function Writer:Write(Text: string): boolean
+function Writer:Write(text: string): boolean
 	-- Safety Checks
 	if self._isWriting == true then
 		warn("Cannot write while the writer is already writing! Cancel the current process first.")
@@ -465,8 +432,8 @@ function Writer:Write(Text: string): boolean
 		return false
 	end
 
-	if type(Text) ~= "string" then
-		warn(`{type(Text)} is not a valid input type! Only strings are accepted.`)
+	if type(text) ~= "string" then
+		warn(`{type(text)} is not a valid input type! Only strings are accepted.`)
 		return false
 	end
 
@@ -480,23 +447,23 @@ function Writer:Write(Text: string): boolean
 		self._activeTransforms = {}
 	end
 
+	-- Reset Animator
+	self._Animator:Reset()
+
 	-- Start writing
 	self._isWriting = true
 	self._writingStartTime = os.clock()
 
-	self._writerThread = coroutine.create(function()
+	self._Thread = coroutine.create(function()
 		-- Parse raw string into character data
-		if self.Settings.RichText == true then
-			self._activeCharacters = RichText.Enrich(Text)
+		if self.activePreset.RichText == true then
+			self._activeCharacters = RichText.Enrich(text)
 		else
-			self._activeCharacters = RichText.Raw(Text)
+			self._activeCharacters = RichText.Raw(text)
 		end
 
 		-- Handle wrapping
-		self._activeTransforms = Wrapper.CalculateTransforms(self._activeCharacters, {
-			FontSize = self.Settings.FontSize,
-			Font = self.Settings.Font,
-		}, self.Container.AbsoluteSize)
+		self._activeTransforms = Wrapper.CalculateTransforms(self._activeCharacters, self.Mount, self.activePreset)
 
 		-- Handle split points
 		local splitPoints = {}
@@ -508,6 +475,29 @@ function Writer:Write(Text: string): boolean
 			end
 		end
 
+		local function calculateWaitLength(character, delayType, delayLength)
+			if delayType then
+				if delayType == "Word" and character ~= " " then
+					return 0
+				end
+
+				if delayType == "IgnoreSpace" and character == " " then
+					return 0
+				end
+
+				return delayLength
+			end
+
+			local baseCooldown = 1 / self.activePreset.WritingSpeed
+			local cooldownMultiple = 1
+
+			if self.activePreset.PauseAfterPunctuation == true then
+				cooldownMultiple = PUNCTUATION_PAUSE_MULTIPLES[character.Value] or 1
+			end
+
+			return baseCooldown * cooldownMultiple
+		end
+
 		-- Loop through each character
 		for characterIndex, character in pairs(self._activeCharacters) do
 			-- If paused, yield the thread
@@ -516,9 +506,8 @@ function Writer:Write(Text: string): boolean
 			end
 
 			-- Write the character
-			local characterTransform = self._activeTransforms[characterIndex]
-			self._activeCharacters[characterIndex].Instance =
-				self:_WriteCharacter(character, characterTransform, self._isSkipped)
+			character.Transform = self._activeTransforms[characterIndex]
+			character:Write(self.Mount, self._Animator, self._isSkipped)
 
 			-- Handle Flags
 			if character.Properties.Flag then
@@ -538,6 +527,15 @@ function Writer:Write(Text: string): boolean
 					currentSplitPoint += 1
 					self._isSkipped = false
 				end
+
+				-- Calculate skipped time and progress the animator by that amount
+				self._Animator:Update(
+					calculateWaitLength(
+						character.Value,
+						character.Properties.DelayType,
+						character.Properties.DelayLength
+					)
+				)
 
 				continue
 			end
@@ -566,10 +564,10 @@ function Writer:Write(Text: string): boolean
 			Audio.playCharacterSound(self.Id)
 
 			-- Calculate the length of time to wait for
-			local baseCooldown = 1 / self.Settings.WritingSpeed
+			local baseCooldown = 1 / self.activePreset.WritingSpeed
 			local cooldownMultiple = 1
 
-			if self.Settings.PauseAfterPunctuation == true then
+			if self.activePreset.PauseAfterPunctuation == true then
 				cooldownMultiple = PUNCTUATION_PAUSE_MULTIPLES[character.Value] or 1
 			end
 
@@ -590,7 +588,7 @@ function Writer:Write(Text: string): boolean
 			end
 		end
 	end)
-	coroutine.resume(self._writerThread)
+	coroutine.resume(self._Thread)
 
 	return true
 end
@@ -616,7 +614,7 @@ function Writer:Cancel(): boolean
 	self._isSkipped = false
 	self._isPaused = false
 
-	coroutine.close(self._writerThread)
+	coroutine.close(self._Thread)
 	return true
 end
 
@@ -665,7 +663,7 @@ function Writer:Resume(): boolean
 	end
 
 	self._isPaused = false
-	coroutine.resume(self._writerThread)
+	coroutine.resume(self._Thread)
 
 	return true
 end
@@ -709,6 +707,15 @@ function Writer:Destroy()
 
 	setmetatable(self, nil)
 	table.clear(self)
+end
+
+function Writer:GetStatus()
+	return {
+		Mounted = self._isMounted,
+		Writing = self._isWriting,
+		Skipped = self._isSkipped,
+		Paused = self._isPaused,
+	}
 end
 
 return Writer

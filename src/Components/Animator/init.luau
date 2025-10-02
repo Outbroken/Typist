@@ -1,21 +1,26 @@
---[[
-@Description:
-Handles animation for the typewriter
+--!strict
 
-@Created: 9/10/25
-@Modified: 9/10/25
-]]
+-->>--------------------------------------------<<--
+-- @Created: September 10th, 2025
+-- @Authors: Outbroken
+
+-- @Description:
+-- Animation module with sequencing and more robust timing
+-->>--------------------------------------------<<--
 
 -- >> Core Services <<
 
-local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 -- >> References : Modules
 
-local WriteEffects = require(script.WriteEffects)
-local Moods = require(script.Moods)
 local Oklab = require(script.Oklab)
+
+local Animations = {}
+for _, animationModule in pairs(script.Animations:GetChildren()) do
+	local animation = require(animationModule)
+	Animations[animationModule.Name] = animation
+end
 
 -- >> Functions <<
 
@@ -62,7 +67,6 @@ local function getAnimationFrame(keyframes: {}, animationTime: number): {}
 		if animationTime >= keyframe1.Time and animationTime <= keyframe2.Time then
 			local t = (animationTime - keyframe1.Time) / (keyframe2.Time - keyframe1.Time)
 			local easedTime = TweenService:GetValue(t, keyframe2.EasingStyle, keyframe2.EasingDirection)
-
 			return interpolateKeyframes(keyframe1, keyframe2, easedTime)
 		end
 	end
@@ -80,20 +84,8 @@ function Animator.new()
 	}, Animator)
 end
 
-function Animator:addAnimation(Animation: {})
-	-- Animation
-	-- Object: Instance
-	-- CreationTime: number (relative to animator current time)
-	-- Keyframes: {}
-	-- Loop: boolean
-	-- Delay: number
-
-	-- Keyframe
-	-- Time: number
-	-- EasingStyle: EasingType
-	-- EasingDirection: EasingDirection
-	-- Properties: { [string]: any }
-	local newAnimation = Animation
+function Animator:AddAnimation(animation: {})
+	local newAnimation = animation
 	newAnimation.CreationTime = self.currentTime
 
 	-- Substitute fallback values if needed
@@ -106,9 +98,14 @@ function Animator:addAnimation(Animation: {})
 			Properties = keyframe.Properties or {},
 		}
 	end
-	newAnimation.Keyframes = newKeyframes
 
+	newAnimation.Keyframes = newKeyframes
 	self._activeAnimations[#self._activeAnimations + 1] = newAnimation
+end
+
+function Animator:Reset()
+	self._activeAnimations = {}
+	self.currentTime = 0
 end
 
 function Animator:Update(deltaTime: number)
@@ -120,9 +117,11 @@ function Animator:Update(deltaTime: number)
 		local creationTime = animation.CreationTime
 
 		local animationTime = self.currentTime - creationTime
+
 		if animationTime - deltaTime > Keyframes[#Keyframes].Time then
 			if animation.Repeat == true then
-				self._activeAnimations[index].CreationTime = self.currentTime
+				-- hack: adds the animation length to the creation time, so it's like if the animation has just begun
+				self._activeAnimations[index].CreationTime += Keyframes[#Keyframes].Time
 			else
 				self._activeAnimations[index] = nil
 				continue
@@ -132,22 +131,32 @@ function Animator:Update(deltaTime: number)
 		local currentProperties = getAnimationFrame(Keyframes, animationTime)
 
 		for propertyName, propertyValue in pairs(currentProperties) do
-			Object[propertyName] = propertyValue
+			if propertyName == "Position" and animation.PositionAnchor then
+				Object.Position = animation.PositionAnchor + propertyValue
+			else
+				Object[propertyName] = propertyValue
+			end
 		end
 	end
 end
 
-function Animator.PlayMoodAnimation(mood: string, Character: GuiObject)
-	Moods[mood](Character)
+function Animator:LazyUpdate(deltaTime: number)
+	self.currentTime += deltaTime
 end
 
-function Animator.PlayWriteOnAnimation(
-	writeOnEffect: string,
-	Character: GuiObject,
-	desiredPosition: UDim2,
-	writeOnCooldown: number
-)
-	WriteEffects[writeOnEffect](Character, desiredPosition, writeOnCooldown)
+function Animator:PlayAnimation(animationName: string, ...)
+	self:AddAnimation(Animations[animationName](...))
+end
+
+function Animator:AnchorObject(object, newAnchor)
+	for index, animation in pairs(self._activeAnimations) do
+		if animation.Object == object and animation.PositionAnchor then
+			self._activeAnimations[index].PositionAnchor = newAnchor
+			return true
+		end
+	end
+
+	return false
 end
 
 return Animator

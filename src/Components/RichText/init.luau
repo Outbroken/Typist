@@ -11,6 +11,7 @@
 -- >> References : Modules <<
 
 local Config = require(script.Config)
+local Character = require(script.Parent.Parent.Components.Character)
 local Stack = require(script.Parent.Parent.Packages.Stack)
 
 local Styles = {}
@@ -22,7 +23,6 @@ end
 -- >> Types <<
 
 local _Types = require(script.Parent.Parent.Types)
-type Character = _Types.Character
 type CharacterProperties = _Types.CharacterProperties
 
 type Token = _Types.Token
@@ -347,8 +347,6 @@ local function removeTag(tagData: TagToken, currentProperties: CharacterProperti
 	elseif tagName == "delay" then
 		newProperties.DelayLength = nil
 		newProperties.DelayType = nil
-	elseif tagName == "animate" then
-		newProperties.AnimationName = nil
 	else
 		warn(`Unknown Tag: {Config.TAG_OPEN_CHARACTER}/{tagName}{Config.TAG_CLOSE_CHARACTER}!`)
 	end
@@ -393,10 +391,6 @@ local function addTag(tagData: TagToken, currentProperties: CharacterProperties)
 	elseif tagName == "delay" then
 		newProperties.DelayLength = tonumber(tagContent.Length) or 0.5
 		newProperties.DelayType = tagContent.Type or "IgnoreSpace"
-	elseif tagName == "animate" then
-		if tagContent.Name then
-			newProperties.AnimationName = tagContent.Name
-		end
 	else
 		warn(`Unknown Tag: {Config.TAG_OPEN_CHARACTER}{tagName}{Config.TAG_CLOSE_CHARACTER}!`)
 	end
@@ -447,10 +441,11 @@ local function processTokens(Tokens: { Token }): { Character }
 
 			-- Apply properties to every character
 			for _, character in pairs(newCharacters) do
-				Characters[#Characters + 1] = {
-					Value = character,
-					Properties = deepClone(currentProperties),
-				}
+				local newCharacter = Character.new()
+				newCharacter.Value = character
+				newCharacter.Properties = deepClone(currentProperties)
+
+				Characters[#Characters + 1] = newCharacter
 			end
 
 			-- Determine if an action exists within the action table

@@ -15,6 +15,7 @@ return {
 	-- Font
 	Font = Font.new("rbxasset://fonts/families/RobotoMono.json"), -- Ref: https://create.roblox.com/docs/reference/engine/datatypes/Font
 	FontSize = 20, -- Size of the font, in pixels
+	AutoResizeFont = true,
 
 	-- RichText
 	RichText = true, -- Whether the text is parsed for rich text

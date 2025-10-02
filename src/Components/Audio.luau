@@ -44,7 +44,7 @@ function Audio.Initialize(Writer: {})
 	for index = 1, 5, 1 do
 		local newWritingSound = Instance.new("Sound")
 		newWritingSound.Volume = 0.4
-		newWritingSound.SoundId = Writer.Settings.WritingSound
+		newWritingSound.SoundId = Writer.activePreset.WritingSound
 		newWritingSound.Name = index
 		newWritingSound.Parent = characterFolder
 	end

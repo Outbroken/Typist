@@ -1,5 +1,14 @@
--- >> Character <<
+--!strict
 
+-->>--------------------------------------------<<--
+-- @Created: September 14th, 2025
+-- @Authors: Outbroken
+
+-- @Description:
+-- A collection of types used in the module
+-->>--------------------------------------------<<--
+
+-- >> Character <<
 export type CharacterProperties = {
 	Styles: { [string]: any },
 
@@ -25,23 +34,58 @@ export type Character = {
 	Instance: Instance?,
 }
 
+export type CharacterTransform = {
+	Position: UDim2,
+	Size: UDim2,
+	LineNumber: number,
+	CharacterNumber: number,
+	AbsoluteIndex: number,
+}
+
 -- >> Writer <<
 
-export type WriterExitState = "Success" | "Skipped" | "Canceled" | "Destroyed"
+--[=[
+	@interface WriterPreset
+	@within Writer
+	.PresetName string -- The name of the preset
 
-export type WriterSettings = {
-	-- Display
+	.Font Font -- Font used for characters
+	.FontSize number -- Size of the font, in pixels
+	.FontSizingType string -- Absolute / Relative, the method used to determine the font's size
+
+	.RichText boolean -- Whether the text is parsed for rich text
+
+	.WrapText boolean -- Whether text is wrapped when it exceeds its bounds
+	.AbsoluteCharacterWidth boolean -- Forces all characters to match the font width
+	.AbsoluteLineHeight boolean -- Forces all lines to match the font height
+	.Anchor Vector2 -- Alignment of text within the container
+	.Tracking number -- Horizontal space between each character
+	.LineSpacing number -- Vertical space between each line
+
+	.WritingSpeed number -- The speed at which the writer writes, in characters per minute
+	.PauseAfterPunctuation boolean -- Whether the writer pauses longer after punctuation
+	.WritingAnimation string -- The animation effect played as a character is written
+	.WritingSound string -- The sound effect played as a character is written, as an assetId
+]=]
+export type WriterPreset = {
+	PresetName: string,
 	Font: Font,
 	FontSize: number,
+	FontSizingType: string,
+	RichText: boolean,
+	WrapText: boolean,
+	AbsoluteCharacterWidth: boolean,
+	AbsoluteLineHeight: boolean,
+	Anchor: Vector2,
 	Tracking: number,
 	LineSpacing: number,
-	Wrapping: boolean,
-
-	-- Writer
 	WritingSpeed: number,
-	PauseOnPunctuation: boolean,
+	PauseAfterPunctuation: boolean,
 	WritingAnimation: string,
+	WritingSound: string,
 }
+
+export type WriterExitState = "Success" | "Skipped" | "Canceled" | "Destroyed"
 
 -- >> Rich Text <<
 
