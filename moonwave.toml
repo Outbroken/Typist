@@ -1,3 +1,10 @@
 title = "Typist"  # From Git
 gitRepoUrl = "https://github.com/Outbroken/Typist" # From Git
 
+gitSourceBranch = "master"
+changelog = true
+classOrder = []
+
+[docusaurus]
+onBrokenLinks = "throw"
+onBrokenMarkdownLinks = "warn"

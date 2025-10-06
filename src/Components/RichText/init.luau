@@ -12,7 +12,6 @@
 
 local Config = require(script.Config)
 local Character = require(script.Parent.Parent.Components.Character)
-local Stack = require(script.Parent.Parent.Packages.Stack)
 
 local Styles = {}
 for _, styleModule: ModuleScript in pairs(script.Styles:GetChildren()) do
@@ -23,6 +22,8 @@ end
 -- >> Types <<
 
 local _Types = require(script.Parent.Parent.Types)
+
+type CharacterClass = Character.CharacterClass
 type CharacterProperties = _Types.CharacterProperties
 
 type Token = _Types.Token
@@ -31,13 +32,9 @@ type TextToken = _Types.TextToken
 
 -- >> Functions : Utility <<
 
--- The function used for deep cloning a table
-
 --[[
-@Reference: https://create.roblox.com/docs/luau/tables#deep-clones
-
-@Description:
-Clones a table and its sub-tables
+	Clones a table and its sub-tables
+	https://create.roblox.com/docs/luau/tables#deep-clones
 ]]
 local function deepClone(original: { any }): {}
 	-- Define the new table for the copy
@@ -56,8 +53,7 @@ local function deepClone(original: { any }): {}
 end
 
 --[[
-@Description:
-Converts an HSV color into an RGB color
+	Converts an HSV color into an RGB color
 ]]
 local function HSVToRGB(h: number, s: number, v: number): { number }
 	s = s / 100
@@ -96,16 +92,8 @@ end
 -- >> Functions : Parsing <<
 
 --[[
-@Reference: https://devforum.roblox.com/t/writing-your-own-rich-text-system/3460917
-
-@Description:
-Reads a tag, converting a string into a table of values
-
-@Inputs:
-- Tag <string>: a tag string (ex: "")
-
-@Output:
-<Tag?> a token with data about the tag
+	Reads a tag, outputting a token with data about the tag
+	https://devforum.roblox.com/t/writing-your-own-rich-text-system/3460917
 ]]
 local function readTag(Tag: string): Token?
 	-- * "<" Matches the opening angle bracket
@@ -119,7 +107,7 @@ local function readTag(Tag: string): Token?
 
 	-- If no match is found, the tag's syntax is invalid
 	if not ValidTag then
-		warn(`Parsed Tag ({Tag}) could not be read: Invalid tag syntax.`)
+		warn(`Parsed Tag {Tag} could not be read: Invalid tag syntax.`)
 		return
 	end
 
@@ -137,7 +125,7 @@ local function readTag(Tag: string): Token?
 
 		-- Tag is invalid, there is a syntax error with its attributes
 		if not Attribute then
-			warn(`Parsed Tag ({Tag}) could not be read: Invalid attribute syntax.`)
+			warn(`Parsed Tag {Tag} could not be read: Invalid attribute syntax.`)
 			return
 		end
 
@@ -187,16 +175,8 @@ local function readTag(Tag: string): Token?
 end
 
 --[[
-@Source: https://devforum.roblox.com/t/writing-your-own-rich-text-system/3460917
-
-@Description:
-Parses a string for tags
-
-@Inputs:
-- Input <string>: the input string to parse
-
-@Output:
-<Tag[]> a list with tag data
+	Parses a string for tags
+	https://devforum.roblox.com/t/writing-your-own-rich-text-system/3460917
 ]]
 local function parseText(Input: string): { Token }
 	-- Tells the parser which characters to check for a tag within
@@ -252,83 +232,79 @@ local function parseText(Input: string): { Token }
 end
 
 --[[
-@Source: https://devforum.roblox.com/t/writing-your-own-rich-text-system/3460917
-
-@Description:
-Validates a set of tokens
-
-@Inputs:
-- Tokens <Tag[]>: a set of tokens to
-
-@Output:
-<boolean> true if no errors were found
+	Validates a set of tokens, returning an error string if invalid
 ]]
-local function validateTokens(Tokens: { TagToken }): boolean
-	local tagPrefix = Config.TAG_OPEN_CHARACTER .. "/"
-	local tagSuffix = Config.TAG_CLOSE_CHARACTER
-
-	local Tags = Stack.new()
+local function validateTokens(Tokens: { TagToken }): string?
+	local openedTags = {}
 
 	for _, Token in Tokens do
+		-- Only tags matter for validation
 		if Token.Type ~= "TAG" then
 			continue
-		end -- We only care about tags for this validation
+		end
+
+		-- If the tag is an action tag, continue
+		if Token.Action then
+			continue
+		end
 
 		if Token.Opening then
-			Tags:Push(Token.Name) -- If it is an opening tag, push it to the stack
+			-- Search through currently opened tags
+			for _, openedTag in openedTags do
+				-- If this tag is already opened, return an error
+				if openedTag.Name == Token.Name then
+					return `Tag <{openedTag.Name}> has already been opened. Did you mean to close it?`
+				end
+			end
+
+			-- Add tag to the opened Tags stack
+			openedTags[#openedTags + 1] = Token
 		else
-			if next(Token.Content) ~= nil then
-				warn(
-					`Warning, attributes defined for closing tag ({Token.Name}), please define attributes in opening tag instead.`
-				)
+			local tokenHasContent = false
+			for _, _ in pairs(Token.Content) do
+				tokenHasContent = true
+				break
 			end
 
-			local Top = Tags:Pop() -- Remove tag from top of stack
-			if Top ~= Token.Name then -- Tag name mismatch
-				-- Output expected and recieved name of tag for debugging
-				warn(
-					`Invalid nesting of Tags. Expected {tagPrefix}{Top}{tagSuffix}, got {tagPrefix}{Token.Name}{tagSuffix}.`
-				)
-				return false -- Invalidate tokens
+			if tokenHasContent then
+				return `Attributes defined for closing tag </{Token.Name}>. Please define attributes in opening tag instead.`
+			end
+
+			-- Search through the opened tags and close the current one
+			local tagClosed = false
+			for index, openedTag in openedTags do
+				if openedTag.Name == Token.Name then
+					table.remove(openedTags, index)
+					tagClosed = true
+
+					break
+				end
+			end
+
+			-- If there is no tag to close, return an error
+			if tagClosed == false then
+				return `Tag </{Token.Name}> does not close anything.`
 			end
 		end
 	end
 
-	if not Tags:Empty() then -- If not all tags were closed
-		for _, Tag: Tag in Tags do
-			warn(`Missing closing tag: {tagPrefix}{Tag}{Config.TAG_CLOSE_CHARACTER}`) -- Output their name for debugging
+	-- Output the tags that are missing a closing tag
+	if #openedTags > 0 then
+		local missingTags = "Missing closing tag for:"
+
+		for _, Tag in openedTags do
+			missingTags ..= ` <{Tag.Name}>`
 		end
-		return false -- Invalidate tokens
+
+		return missingTags
 	end
 
-	return true -- No validation issues found
+	return -- No validation issues found
 end
 
-local function addAction(tagData: TagToken, currentActions: {}): {}
-	local newActions = currentActions
-
-	local tagName = tagData.Name
-	local tagContent = tagData.Content
-
-	if tagName == "flag" then
-		newActions.Flag = tonumber(tagContent.Id)
-	elseif tagName == "split" then
-		newActions.Split = true
-	elseif tagName == "image" then
-		newActions.Image = {
-			Id = tagContent.Id,
-		}
-	elseif tagName == "sound" then
-		newActions.Sound = {
-			Id = tagContent.Id,
-			Volume = tagContent.Volume,
-			Pitch = tagContent.Pitch,
-		}
-	end
-
-	return newActions
-end
-
+--[[
+	Removes a tag from a set of character properties
+]]
 local function removeTag(tagData: TagToken, currentProperties: CharacterProperties): CharacterProperties
 	local newProperties = currentProperties
 	local tagName = tagData.Name
@@ -355,15 +331,7 @@ local function removeTag(tagData: TagToken, currentProperties: CharacterProperti
 end
 
 --[[
-@Description:
-Processes a tag, adding it to the currently active properties
-
-@Inputs:
-- currentProperties <CharacterProperties>: currently active properties
-- tagData <Tag>: a tag to process
-
-@Output:
-<CharacterProperties> a new set of properties, with the tag applied
+	Adds a tag to a set of character properties
 ]]
 local function addTag(tagData: TagToken, currentProperties: CharacterProperties): CharacterProperties
 	local newProperties = currentProperties
@@ -379,14 +347,13 @@ local function addTag(tagData: TagToken, currentProperties: CharacterProperties)
 
 	-- Other Tags
 	if tagName == "size" then
-		local terminatingCharacter = string.sub(tagContent.Size, #tagContent.Size, #tagContent.Size - 1)
+		local terminatingCharacter = string.sub(tagContent.Size, #tagContent.Size, #tagContent.Size)
+		local sizeString = string.sub(tagContent.Size, 1, #tagContent.Size - 1)
 
 		if terminatingCharacter == "%" then
-			newProperties.Size = tonumber(string.sub(tagContent.Size, 1, #tagContent.Size - 1))
-			newProperties.SizingType = "RELATIVE"
-		else
-			newProperties.Size = tonumber(tagContent.Size)
-			newProperties.SizingType = "ABSOLUTE"
+			newProperties.Size = 1 + (tonumber(sizeString) / 100)
+		elseif terminatingCharacter == "x" then
+			newProperties.Size = tonumber(sizeString)
 		end
 	elseif tagName == "delay" then
 		newProperties.DelayLength = tonumber(tagContent.Length) or 0.5
@@ -399,17 +366,38 @@ local function addTag(tagData: TagToken, currentProperties: CharacterProperties)
 end
 
 --[[
-@Description:
-Processes a set of tokens, generating a list of rich characters from it
-
-@Inputs:
-- Tokens <Tag[]>: a set of tokens to apply
-
-@Output:
-<Character[]> a list of rich characters
+	Adds an action tag to a list of current actions
 ]]
-local function processTokens(Tokens: { Token }): { Character }
-	local Characters: { Character } = {}
+local function addAction(tagData: TagToken, currentActions: {}): {}
+	local newActions = currentActions
+
+	local tagName = tagData.Name
+	local tagContent = tagData.Content
+
+	if tagName == "flag" then
+		newActions.Flag = tonumber(tagContent.Id)
+	elseif tagName == "split" then
+		newActions.Split = true
+	elseif tagName == "image" then
+		newActions.Image = {
+			Id = tagContent.Id,
+		}
+	elseif tagName == "sound" then
+		newActions.Sound = {
+			Id = tagContent.Id,
+			Volume = tagContent.Volume,
+			Pitch = tagContent.Pitch,
+		}
+	end
+
+	return newActions
+end
+
+--[[
+	Processes a set of tokens, generating a list of rich characters from it
+]]
+local function processTokens(Tokens: { Token }): { CharacterClass }
+	local Characters: { CharacterClass } = {}
 
 	-- Properties that apply to every character until the tag is closed
 	local currentProperties = { Styles = {} }
@@ -474,40 +462,41 @@ end
 local RichText = {}
 
 --[[
-	Writes a string of text to the screen.
-	* The input will be parsed automatically
-	* Proper syntax can be found [here]()
-
-	```lua
-	myWriter:Write("Hello, World! I'm <b>Bold!</b>")
-	```
-
-	@param Text string -- Text for the writer to write, parsed by default.
-	@return boolean -- Writer successfully started writing
+	Enriches a string of text, creating a list of rich characters
 ]]
-function RichText.Enrich(Text: string): { Character }
-	local tokens = parseText(Text)
+function RichText.Enrich(text: string, validation: boolean): { CharacterClass }
+	local tokens = parseText(text)
 
-	if Config.STRICT_PARSING and not validateTokens(tokens) then
-		warn("Could not validate Tokens!")
-		return {}
+	if validation then
+		local validationError = validateTokens(tokens)
+
+		if validationError then
+			warn("A problem was found while enriching text:")
+			warn(validationError)
+		end
 	end
 
 	return processTokens(tokens)
 end
 
-function RichText.Derich(Characters: { Character }): string
+--[[
+	Deriches a list of rich characters, creating a string of text
+]]
+function RichText.Derich(characters: { CharacterClass }): string
 	local derichedText = ""
 
-	for _, character in pairs(Characters) do
+	for _, character in pairs(characters) do
 		derichedText ..= character.Value
 	end
 
 	return derichedText
 end
 
-function RichText.Raw(Text: string): { Character }
-	local Characters = string.split(Text, "")
+--[[
+	Converts a string of text into a list of characters without applying styles
+]]
+function RichText.Raw(text: string): { CharacterClass }
+	local Characters = string.split(text, "")
 	local newCharacters = {}
 
 	for _, character in pairs(Characters) do

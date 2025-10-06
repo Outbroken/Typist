@@ -11,8 +11,6 @@
 -- https://mit-license.org
 -->>--------------------------------------------<<--
 
--- TODO: Maintain character position in animation while being adjusted for container size
-
 -- >> Core Services <<
 
 local RunService = game:GetService("RunService")
@@ -21,9 +19,11 @@ local RunService = game:GetService("RunService")
 
 local RichText = require(script.Components.RichText)
 local Wrapper = require(script.Components.Wrapper)
-local Audio = require(script.Components.Audio)
 
 local Animator = require(script.Components.Animator)
+local SoundPlayer = require(script.Components.SoundPlayer)
+local Character = require(script.Components.Character)
+
 local Signal = require(script.Packages.GoodSignal)
 
 local Presets = {}
@@ -34,19 +34,24 @@ end
 
 -- >> References : Types <<
 
-local T_Types = require(script.Types)
-type CharacterProperties = T_Types.CharacterProperties
---type Character = T_Types.Character
+local Types = require(script.Types)
 
-type WriterExitState = T_Types.WriterExitState
-type WriterPreset = T_Types.WriterPreset
+type WriterExitState = Types.WriterExitState
+type WriterPreset = Types.WriterPreset
+type WriterState = Types.WriterState
+
+type CharacterClass = Character.CharacterClass
+type CharacterTransform = Types.CharacterTransform
+
+type SoundPlayerClass = SoundPlayer.SoundPlayerClass
 
 -- >> Constants <<
 
+-- If PauseOnPunctuation is active, multiply the delay of a character by this amount:
 local PUNCTUATION_PAUSE_MULTIPLES = {
-	["."] = 6, -- 6x slower than the typewriter's base speed
+	["."] = 6,
 	["?"] = 6,
-	["!"] = 3,
+	["!"] = 6,
 
 	[","] = 4,
 	[":"] = 2,
@@ -55,9 +60,46 @@ local PUNCTUATION_PAUSE_MULTIPLES = {
 
 -- >> Variables <<
 
-local currentWriterIndex = 0
+local _currentWriterIndex = 0
 
 -- >> Functions : Utility <<
+
+--[[
+	Updates a writer's mount, recalculating transforms and updating positions
+]]
+local function updateMount(writer)
+	-- Calculate new transforms
+	local newTransforms = Wrapper(writer._activeCharacters, writer.Mount, writer.activePreset)
+
+	-- Update already written characters
+	for index, character in pairs(writer._activeCharacters) do
+		if not character.Model then
+			continue
+		end
+
+		character:UpdateTransform(newTransforms[index], writer._Animator)
+	end
+
+	writer._activeTransforms = newTransforms
+end
+
+--[[
+	Updates a writer, updating animations and mounts
+]]
+local function updateWriter(writer, deltaTime: number)
+	if
+		os.clock() - writer._lastContainerResizeTime > 0.25
+		and writer.Mount.AbsoluteSize ~= writer._lastContainerSize
+	then
+		updateMount(writer)
+		writer._lastContainerResizeTime = os.clock()
+		writer._lastContainerSize = writer.Mount.AbsoluteSize
+	end
+
+	if not writer._Paused then
+		writer._Animator:Update(deltaTime)
+	end
+end
 
 -- >> Module : Core <<
 
@@ -71,37 +113,31 @@ Writer.__index = Writer
 
 export type WriterClass = typeof(setmetatable(
 	{} :: {
+		Id: number,
+		Mount: GuiObject,
+		_state: WriterState,
+		_thread: thread?,
+		_activeCharacters: { CharacterClass },
+		_activeTransforms: { CharacterTransform },
+		_Animator: {}, -- AnimatorClass
+		_SoundPlayer: SoundPlayerClass,
+		activePreset: WriterPreset,
 		onWriterComplete: () -> WriterExitState,
-		onFlagActivate: () -> number,
+		onFlagReached: () -> number,
 		onDestroy: () -> (),
-
-		_Thread: thread?,
-		_isWriting: boolean,
-		_isSkipped: boolean,
-
-		Font: Font,
-		FontSize: number,
-		Tracking: number,
-		Wrapping: boolean,
-
-		WritingSpeed: number,
-		PauseOnPunctuation: boolean,
-		WritingAnimation: string,
-
-		Container: Instance,
 	},
 	Writer
 ))
 
---[[
-	Creates a new Writer!
+--[=[
+	Creates a new **Writer**!
 
 	```lua
 	local myWriter = Typist.new()
 	```
 
-	@return WriterClass -- a new writer object
-]]
+	@return Writer
+]=]
 function Writer.new(): WriterClass
 	-- #region OBJ_DOC
 	--[=[
@@ -113,57 +149,92 @@ function Writer.new(): WriterClass
 	]=]
 
 	--[=[
-		An internal property that contains the mount state of the Writer.
+		The object the writer writes to.
 
-		@prop _isMounted boolean
+		@prop Mount GuiObject
+		@within Writer
+		@readonly
+	]=]
+
+	--[=[
+		An internal property that contains the state of the writer
+
+		@prop _state WriterState
 		@within Writer
 		@private
 	]=]
 
 	--[=[
-		An internal property that contains the writing state of the Writer.
+		An internal property that holds the writer's execution thread
 
-		@prop _isWriting boolean
+		@prop _thread thread
 		@within Writer
 		@private
 	]=]
 
 	--[=[
-		An internal property that contains the skipping state of the Writer.
+		An internal property that stores the characters being written.
 
-		@prop _isSkipped boolean
+		@prop _activeCharacters { CharacterClass }
 		@within Writer
 		@private
 	]=]
 
 	--[=[
-		An internal property that contains the pause state of the Writer.
+		An internal property that stores the location data of the characters being written.
 
-		@prop _isPaused boolean
+		@prop _activeTransforms { CharacterTransform }
 		@within Writer
 		@private
 	]=]
 
+	--[=[
+		Stores the active preset the writer is using.
+
+		@prop activePreset { WriterPreset }
+		@within Writer
+	]=]
+
+	--[=[
+		Event fired after the writer has finished writing the text.
+
+		@prop onWriterComplete GoodSignal
+		@within Writer
+		@tag event
+	]=]
+
+	--[=[
+		Event fired when a flag is reached in the text.
+
+		@prop onFlagReached GoodSignal
+		@within Writer
+		@tag event
+	]=]
+
+	--[=[
+		Event fired immediately before the writer is destroyed.
+
+		@prop onDestroy GoodSignal
+		@within Writer
+		@tag event
+	]=]
 	-- #endregion
 
-	currentWriterIndex += 1
+	_currentWriterIndex += 1
 
 	local WriterData = {
 		-- >> Core <<
-		Id = currentWriterIndex,
+		Id = _currentWriterIndex,
 		Mount = nil,
 
-		-- >> Internal / State <<
-		_isMounted = false,
-		_isWriting = false,
-		_isSkipped = false,
-		_isPaused = false,
-
-		-- >> Internal / Objects <<
-		_Animator = Animator.new(),
-
 		-- >> Internal <<
-		_Thread = nil,
+		_state = {
+			Mounted = false,
+			Writing = false,
+			Skipped = false,
+			Paused = false,
+		},
+		_thread = nil,
 		_activeCharacters = {},
 		_activeTransforms = {},
 
@@ -172,28 +243,32 @@ function Writer.new(): WriterClass
 		_lastContainerSize = nil,
 		_lastContainerResizeTime = -1,
 
+		-- >> Internal / Objects <<
+		_Animator = Animator.new(),
+		_SoundPlayer = SoundPlayer.new(),
+
 		-- >> Settings <<
 		activePreset = Presets._default,
 
 		-- >> Callback Events <<
 		onWriterComplete = Signal.new(),
-		onFlagActivate = Signal.new(),
+		onFlagReached = Signal.new(),
 		onDestroy = Signal.new(),
 	}
 
 	return setmetatable(WriterData, Writer)
 end
 
---[[
-@Overview:
-Initializes the writer
+--[=[
+	Mounts the writer, preparing it for use.
 
-@Inputs:
-- Container: the object to write into
+	```lua
+	myWriter:Mount(mountElement)
+	```
 
-@Output:
-Returns true if the action was successful
-]]
+	@param mount Instance -- The element to write into
+	@return boolean -- The writer was mounted without issue
+]=]
 function Writer:Mount(mount: Instance): boolean
 	-- Safety checks
 	if typeof(mount) ~= "Instance" then
@@ -211,64 +286,14 @@ function Writer:Mount(mount: Instance): boolean
 
 	-- Initialize the update cycle
 	self._updateCycle = RunService.RenderStepped:Connect(function(deltaTime: number)
-		self:_Update(deltaTime)
+		updateWriter(self, deltaTime)
 	end)
 
 	-- Initialize the audio module
-	Audio.Initialize(self)
+	self._SoundPlayer:Init(self.Id, self.activePreset)
 
-	self._isInitialized = true
-end
-
--- >> Module : Internal <<
-
---[[
-@Overview:
-Called every frame, syncs animations
-
-@Inputs:
-- deltaTime: time passed since the last frame
-]]
-function Writer:_Update(deltaTime: number)
-	if os.clock() - self._lastContainerResizeTime > 0.25 and self.Mount.AbsoluteSize ~= self._lastContainerSize then
-		self:_ContainerResized()
-		self._lastContainerResizeTime = os.clock()
-		self._lastContainerSize = self.Mount.AbsoluteSize
-	end
-
-	if not self._isPaused then
-		self._Animator:Update(deltaTime)
-	end
-end
-
---[[
-@Overview:
-Recalcuates transforms to match with the new container size
-]]
-function Writer:_ContainerResized()
-	-- Calculate new transforms
-	local newTransforms = Wrapper.CalculateTransforms(self._activeCharacters, self.Mount, self.activePreset)
-
-	-- Update already written characters
-	for index, character in pairs(self._activeCharacters) do
-		if not character.Model then
-			continue
-		end
-
-		character.Transform = newTransforms[index]
-		character:UpdatePosition(self._Animator, newTransforms[index])
-
-		--[[
-		TweenService:Create(
-			character.Instance,
-			TweenInfo.new(0.15, Enum.EasingStyle.Sine),
-			{ Position = newTransforms[index].Position }
-		):Play()]]
-	end
-
-	--self._Animator:Update(0)
-
-	self._activeTransforms = newTransforms
+	self._state.Mounted = true
+	return true
 end
 
 -- >> Module : Properties <<
@@ -276,159 +301,65 @@ end
 --[=[
 	Loads a **Preset** to the writer.
 
-	@param Preset WriterPreset -- The preset to load
-	@param Overwrite boolean -- If true, overrides the current preset instead
+	@param presetName string -- The name of the preset to load
+	@param overwrite boolean -- If true, overrides the current preset instead
+
+	@return boolean -- The preset was loaded without issue
+
+	:::warning
+		Switching presets while the writer is writing may cause issues!
+	:::
 ]=]
-function Writer:LoadPreset(Preset: WriterPreset, Overwrite: boolean)
+function Writer:LoadPreset(presetName: string, overwrite: boolean): boolean
+	-- Reference the preset, if it doesn't exist, return
+	local newPreset = Presets[presetName]
+
+	if not newPreset then
+		warn(`Could not load preset. "{presetName}" is not a known preset.`)
+		return false
+	end
+
 	-- The preset to use as a fallback for missing values
 	local basePreset = Presets._default
 
 	-- If overwrite is true, overwrite the current preset instead of the default
-	if Overwrite then
+	if overwrite then
 		basePreset = self.activePreset
 	end
 
 	-- Load the preset
 	for currentProperty, currentValue in pairs(basePreset) do
-		self.activePreset[currentProperty] = Preset[currentProperty] or currentValue
-	end
-end
-
---[[
-@Overview:
-Safely applies settings to the typewriter
-
-@Inputs:
-- Settings <WriterSettings>: the settings to apply
-]]
-function Writer:ApplySettings(Settings: WriterSettings)
-	local errStr = "Could not set property: "
-	local wrnStr = "Warning, property: "
-
-	-- Initial
-	if typeof(Settings) ~= "table" then
-		warn(`Could not apply settings! Please input a valid table.`)
-		return
+		self.activePreset[currentProperty] = newPreset[currentProperty] or currentValue
 	end
 
-	-- Font
-	if Settings.Font then
-		if typeof(Settings.Font) == "Font" then
-			self.Font = Settings.Font
-		else
-			warn(`{errStr}Font! Type {typeof(Settings.Font)} given, Type [Font] required.`)
-		end
-	end
-
-	-- Font Size
-	if Settings.FontSize then
-		if typeof(Settings.Font) == "number" then
-			self.FontSize = Settings.FontSize
-
-			if Settings.FontSize < 0 or Settings.FontSize > 200 then
-				warn(`{wrnStr}FontSize [{Settings.Tracking}] is outside of the recommended range (0-200).`)
-			end
-		else
-			warn(`{errStr}FontSize! Type [{typeof(Settings.Font)}] given, Type [number] required.`)
-		end
-	end
-
-	-- Tracking
-	if Settings.Tracking then
-		if typeof(Settings.Tracking) == "number" then
-			self.Tracking = Settings.Tracking
-
-			if Settings.Tracking < 0 or Settings.Tracking > 2 then
-				warn(`{wrnStr}Tracking [{Settings.Tracking}] is outside of the recommended range (0-2).`)
-			end
-		else
-			warn(`{errStr}Tracking! Type [{typeof(Settings.Tracking)}] given, Type [number] required.`)
-		end
-	end
-
-	-- Line Spacing
-	if Settings.LineSpacing then
-		if typeof(Settings.LineSpacing) == "number" then
-			self.LineSpacing = Settings.LineSpacing
-
-			if Settings.LineSpacing < 0 or Settings.LineSpacing > 2 then
-				warn(`{wrnStr}LineSpacing [{Settings.LineSpacing}] is outside of the recommended range (0-2).`)
-			end
-		else
-			warn(`{errStr}LineSpacing! Type [{typeof(Settings.LineSpacing)}] given, Type [number] required.`)
-		end
-	end
-
-	-- Wrapping
-	if Settings.Wrapping ~= nil then
-		if typeof(Settings.Wrapping) == "boolean" then
-			self.Wrapping = Settings.Wrapping
-		else
-			warn(`{errStr}Wrapping! Type [{typeof(Settings.Wrapping)}] given, Type [boolean] required.`)
-		end
-	end
-
-	-- Writing Speed
-	if Settings.WritingSpeed then
-		if typeof(Settings.WritingSpeed) == "number" then
-			self.WritingSpeed = Settings.WritingSpeed
-
-			if Settings.WritingSpeed < 0 or Settings.WritingSpeed > 100 then
-				warn(`{wrnStr}WritingSpeed [{Settings.WritingSpeed}] is outside of the recommended range (0-100).`)
-			end
-		else
-			warn(`{errStr}WritingSpeed! Type [{typeof(Settings.WritingSpeed)}] given, Type [number] required.`)
-		end
-	end
-
-	-- Pause on punctuation
-	if Settings.PauseOnPunctuation ~= nil then
-		if typeof(Settings.PauseOnPunctuation) == "boolean" then
-			self.PauseOnPunctuation = Settings.PauseOnPunctuation
-		else
-			warn(
-				`{errStr}PauseOnPunctuation! Type [{typeof(Settings.PauseOnPunctuation)}] given, Type [boolean] required.`
-			)
-		end
-	end
-
-	-- Writing Animation
-	if Settings.WritingAnimation then
-		if typeof(Settings.WritingAnimation) == "string" then
-			if WritingEffects[Settings.WritingAnimation] then -- BROKEN!!
-				self.WritingAnimation = Settings.WritingAnimation
-			else
-				warn(`{errStr}WritingAnimation! [{Settings.WritingAnimation}] is not a valid animation.`)
-			end
-		else
-			warn(`{errStr}WritingAnimation! Type [{typeof(Settings.WritingAnimation)}] given, Type [string] required.`)
-		end
-	end
+	return true
 end
 
 -- >> Module : Actions <<
 
---[[
-	Writes a string of text to the screen.
-	* The input will be parsed automatically
-	* Proper syntax can be found [here]()
+--[=[
+	Writes a string of text.
 
 	```lua
-	myWriter:Write("Hello, World! I'm <b>Bold!</b>")
+	myWriter:Write("Hello, World!")
 	```
 
-	@param Text string -- Text for the writer to write, parsed by default.
-	@return boolean -- Writer successfully started writing
-]]
+	@param text string -- The text to write
+	@return boolean -- **Writer** successfully started writing
+
+	:::note
+		The Writer must be mounted!
+	:::
+]=]
 function Writer:Write(text: string): boolean
 	-- Safety Checks
-	if self._isWriting == true then
+	if self._state.Writing then
 		warn("Cannot write while the writer is already writing! Cancel the current process first.")
 		return false
 	end
 
-	if self._isInitialized == false then
-		warn("The writer must be initialized before it can start writing! Call Writer:Init().")
+	if self._state.Mounted == false then
+		warn("The writer must be mounted before it can start writing! Call Writer:Mount().")
 		return false
 	end
 
@@ -440,7 +371,7 @@ function Writer:Write(text: string): boolean
 	-- Clear old text
 	if #self._activeCharacters > 0 then
 		for _, character in pairs(self._activeCharacters) do
-			character.Instance:Destroy()
+			character:Destroy()
 		end
 
 		self._activeCharacters = {}
@@ -451,19 +382,19 @@ function Writer:Write(text: string): boolean
 	self._Animator:Reset()
 
 	-- Start writing
-	self._isWriting = true
+	self._state.Writing = true
 	self._writingStartTime = os.clock()
 
-	self._Thread = coroutine.create(function()
+	self._thread = coroutine.create(function()
 		-- Parse raw string into character data
 		if self.activePreset.RichText == true then
-			self._activeCharacters = RichText.Enrich(text)
+			self._activeCharacters = RichText.Enrich(text, self.activePreset.ValidateRichText)
 		else
 			self._activeCharacters = RichText.Raw(text)
 		end
 
 		-- Handle wrapping
-		self._activeTransforms = Wrapper.CalculateTransforms(self._activeCharacters, self.Mount, self.activePreset)
+		self._activeTransforms = Wrapper(self._activeCharacters, self.Mount, self.activePreset)
 
 		-- Handle split points
 		local splitPoints = {}
@@ -475,247 +406,246 @@ function Writer:Write(text: string): boolean
 			end
 		end
 
-		local function calculateWaitLength(character, delayType, delayLength)
-			if delayType then
-				if delayType == "Word" and character ~= " " then
-					return 0
-				end
-
-				if delayType == "IgnoreSpace" and character == " " then
-					return 0
-				end
-
-				return delayLength
-			end
-
-			local baseCooldown = 1 / self.activePreset.WritingSpeed
-			local cooldownMultiple = 1
-
-			if self.activePreset.PauseAfterPunctuation == true then
-				cooldownMultiple = PUNCTUATION_PAUSE_MULTIPLES[character.Value] or 1
-			end
-
-			return baseCooldown * cooldownMultiple
-		end
-
 		-- Loop through each character
 		for characterIndex, character in pairs(self._activeCharacters) do
 			-- If paused, yield the thread
-			if self._isPaused == true then
+			if self._state.Paused then
 				coroutine.yield()
 			end
 
 			-- Write the character
 			character.Transform = self._activeTransforms[characterIndex]
-			character:Write(self.Mount, self._Animator, self._isSkipped)
+			character:Write(self.Mount, self._Animator, self.activePreset, self._state.Skipped)
 
-			-- Handle Flags
+			-- Handle Flags and Custom Sounds
 			if character.Properties.Flag then
-				self.onFlagActivate:Fire(character.Properties.Flag)
+				self.onFlagReached:Fire(character.Properties.Flag)
 			end
 
-			-- Handle Custom Sounds
 			local customSound = character.Properties.Sound
 			if customSound then
-				Audio.playCustomSound(self.Id, customSound.Id, customSound.Volume, customSound.Pitch)
+				self._SoundPlayer:PlayCustomSound(customSound.Id, customSound.Volume, customSound.Pitch)
 			end
 
-			-- If skipped, ignore the cooldown and move on to the next character immediately
-			if self._isSkipped == true then
-				-- If the current index is a split point, stop skipping
-				if characterIndex == splitPoints[currentSplitPoint] then
-					currentSplitPoint += 1
-					self._isSkipped = false
-				end
+			-- The amount of time to delay until the next character is written
+			local waitTime = 0
 
-				-- Calculate skipped time and progress the animator by that amount
-				self._Animator:Update(
-					calculateWaitLength(
-						character.Value,
-						character.Properties.DelayType,
-						character.Properties.DelayLength
-					)
-				)
-
-				continue
-			end
-
-			-- If the delay property exists, override the default waiting
+			-- If the delay property exists, calculate the wait time from there
 			if character.Properties.DelayType then
+				local Skip = false
+
 				-- If the delay type is Word, skip over non-space characters
 				if character.Properties.DelayType == "Word" and character.Value ~= " " then
-					continue
+					Skip = true
 				end
 
 				-- If the delay type is IgnoreSpace, skip over space characters
 				if character.Properties.DelayType == "IgnoreSpace" and character.Value == " " then
-					continue
+					Skip = true
 				end
 
-				-- Play the writing sound
-				Audio.playCharacterSound(self.Id)
+				-- Wait the delay's length
+				if Skip == false then
+					waitTime = character.Properties.DelayLength
+				end
+			else
+				-- Calculate the length of time to wait for
+				local baseCooldown = 1 / self.activePreset.WritingSpeed
+				local cooldownMultiple = 1
 
-				-- Wait the delay length
-				task.wait(character.Properties.DelayLength)
+				-- If pausing after punctuation is active, calculate the amount of time to pause for
+				if self.activePreset.PauseAfterPunctuation == true then
+					cooldownMultiple = PUNCTUATION_PAUSE_MULTIPLES[character.Value] or 1
+				end
+
+				waitTime = baseCooldown * cooldownMultiple
+			end
+
+			-- If skipped, ignore the wait time and move on to the next character immediately
+			if self._state.Skipped == true then
+				-- If the current character has a split point, stop skipping
+				if characterIndex == splitPoints[currentSplitPoint] then
+					currentSplitPoint += 1
+					self._state.Skipped = false
+				end
+
+				-- Apply the wait time to the animator instead
+				self._Animator:Update(waitTime)
+				continue
+			end
+
+			-- If there is no wait time, don't play the character sound
+			if waitTime == 0 then
 				continue
 			end
 
 			-- Play the writing sound
-			Audio.playCharacterSound(self.Id)
-
-			-- Calculate the length of time to wait for
-			local baseCooldown = 1 / self.activePreset.WritingSpeed
-			local cooldownMultiple = 1
-
-			if self.activePreset.PauseAfterPunctuation == true then
-				cooldownMultiple = PUNCTUATION_PAUSE_MULTIPLES[character.Value] or 1
-			end
+			self._SoundPlayer:PlayCharacterSound()
 
 			-- Wait
-			task.wait(baseCooldown * cooldownMultiple)
+			task.wait(waitTime)
 		end
 
 		-- Reset internal variables
-		self._isSkipped = false
-		self._isWriting = false
+		self._state.Skipped = false
+		self._state.Paused = false
+		self._state.Writing = false
 
-		-- Callback
+		-- Fire the onWriterComplete event if it exists
 		if self.onWriterComplete then
-			if self._isSkipped then
+			if self._Skipped then
 				self.onWriterComplete:Fire("Skipped")
 			else
 				self.onWriterComplete:Fire("Success")
 			end
 		end
 	end)
-	coroutine.resume(self._Thread)
+
+	-- Automatically start writing
+	coroutine.resume(self._thread)
 
 	return true
 end
 
---[[
-	Cancels the writer's current action
-	* The **Writer** must actively be writing in order to be cancelled
+--[=[
+	Cancels the active writer process.
 
 	```lua
-	myWriter:Write("I'm about to be cancelled!")
 	myWriter:Cancel()
 	```
 
-	@return boolean -- The **Writer** cancelled without issue
-]]
+	@return boolean -- **Writer** cancelled without an issue
+]=]
 function Writer:Cancel(): boolean
-	if self._isWriting == false then
+	if self._state.Writing == false then
 		warn("Can't cancel the writer since it isn't writing! Start it first.")
 		return false
 	end
 
-	self._isWriting = false
-	self._isSkipped = false
-	self._isPaused = false
+	self._state.Writing = false
+	self._state.Skipped = false
+	self._state.Paused = false
 
-	coroutine.close(self._Thread)
+	coroutine.close(self._thread)
 	return true
 end
 
---[[
-	Pauses the writer, halting execution until it is resumed.
-	* The **Writer** must actively be writing in order to be paused
+--[=[
+	Pauses the **Writer**, halting execution until it is resumed.
 
 	```lua
-	myWriter:Write("Oh no! I'm about to be paused!")
 	myWriter:Pause()
 	```
 
-	@return boolean -- The **Writer** paused without issue
-]]
+	@return boolean -- **Writer** paused without an issue
+]=]
 function Writer:Pause(): boolean
-	if self._isWriting == false then
+	if self._state.Writing == false then
 		warn("Can't pause the writer since it isn't writing! Start it first.")
 		return false
 	end
 
-	self._isPaused = true
+	self._state.Paused = true
 	return true
 end
 
---[[
+--[=[
 	Resumes the **Writer**, continuing execution.
-	* The **Writer** must be paused in order to be resumed
 
 	```lua
-	myWriter:Write("I'm about to be paused. Though I'm sure I'll be resumed again!")
-	myWriter:Pause()
 	myWriter:Resume()
 	```
 
-	@return boolean -- The **Writer** resumed without issue
-]]
+	@return boolean -- **Writer** resumed without an issue
+]=]
 function Writer:Resume(): boolean
-	if self._isWriting == false then
+	if self._state.Writing == false then
 		warn("Can't resume the writer since it isn't writing! Start it first.")
 		return false
 	end
 
-	if self._isPaused == false then
+	if self._state.Paused == false then
 		warn("Can't resume the writer since it isn't paused! This call is redundant.")
 		return false
 	end
 
-	self._isPaused = false
-	coroutine.resume(self._Thread)
+	self._state.Paused = false
+	coroutine.resume(self._thread)
 
 	return true
 end
 
---[[
-	Ignores the delay, instantly writing all characters.
-	* The **Writer** must be writing in order to be skipped
+--[=[
+	Instantly writes all characters, ignoring the usual cooldown.
 
 	```lua
-	myWriter:Write("I'm going to get skipped.")
 	myWriter:Skip()
 	```
 
-	Note: If the text contains a *split*, skipping will stop at the next one found.
+	If the string of text contains a split, the **Writer** will skip until there instead.
 	```lua
-	myWriter:Write("This part will get skipped.<//split> But this part won't.")
+	myWriter:Write("This will get skipped immediately.<//split> This part will after another call.")
 	myWriter:Skip()
 	```
 
-	@return boolean -- The **Writer** skipped without issue
-]]
+	@return boolean -- **Writer** skipped without an issue
+]=]
 function Writer:Skip(): boolean
-	if self._isWriting == false then
+	if self._state.Writing == false then
 		warn("Can't skip when the writer isn't writing! Start it first.")
 		return false
 	end
 
-	self._isSkipped = true
+	self._state.Skipped = true
 	return true
 end
 
---[[
-@Description:
-Destroys the writer, disconnecting events and cleaning up
-]]
+--[=[
+	Destroys the writer, freeing memory and cleaning up.
+
+	```lua
+	myWriter:Destroy()
+	```
+]=]
 function Writer:Destroy()
-	self.onDestroy:Fire()
+	-- GoodSignal events should get gced automatically
+	-- Disconnect the writer update cycle
+	self._updateCycle:Disconnect()
 
-	self.onWriterComplete:Disconnect()
-	self.onDestroy:Disconnect()
+	-- Destroy the animator and soundplayer
+	self._Animator:Destroy()
+	self._SoundPlayer:Destroy()
 
+	-- Destroy the mount folder
+	if self.Mount._Characters then
+		self.Mount._Characters:Destroy()
+	end
+
+	-- Clear self
 	setmetatable(self, nil)
 	table.clear(self)
 end
 
-function Writer:GetStatus()
-	return {
-		Mounted = self._isMounted,
-		Writing = self._isWriting,
-		Skipped = self._isSkipped,
-		Paused = self._isPaused,
-	}
+-- >> Module : Reading/Debug <<
+
+--[=[
+	Debugs the writer.
+
+	@private
+]=]
+function Writer:_Diagnose()
+	local date = os.date("!*t")
+	local timestamp = string.format("%02i:%02i", (os.date("!*t").hour - 4) % 24, date.min)
+
+	print("<<------------------------ Diagnosing Writer! -------------------------->>")
+	print("| Time (EST):", timestamp)
+	print("| Time (os):", os.clock())
+	print("<---------- State ---------->")
+	print(`| Mounted: {self._state.Mounted}`)
+	print(`| Writing: {self._state.Writing}`)
+	print(`| Skipped: {self._state.Skipped}`)
+	print(`| Paused: {self._state.Paused}`)
+	print("<<------------------------ Diagnosis Complete! ------------------------->>")
 end
 
 return Writer

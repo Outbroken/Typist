@@ -63,9 +63,9 @@ function TagUtilities.evaluateAdvancedColorContent(colorContent: string): {}
 	local fadePropertiesString = string.match(colorContent, "%(.-%)")
 	local fadeProperties = string.split(string.sub(fadePropertiesString, 2, #fadePropertiesString - 1), ", ")
 
-	local fadeDuration = tonumber(fadeProperties[1])
-	local fadeEasing = Enum.EasingStyle[fadeProperties[2]]
-	local fadeRepeat = fadeProperties[3] ~= nil
+	local fadeDuration = tonumber(fadeProperties[1]) or 1
+	local fadeEasing = Enum.EasingStyle[fadeProperties[2] or "Linear"]
+	local fadeRepeat = fadeProperties[3] or true
 
 	local fadeValuesStart, fadeValuesEnd = string.find(colorContent, "%{.-%}")
 	local fadeValues = string.split(string.sub(colorContent, fadeValuesStart + 1, fadeValuesEnd - 1), ", ")

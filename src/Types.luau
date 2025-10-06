@@ -28,12 +28,6 @@ export type CharacterProperties = {
 	}?,
 }
 
-export type Character = {
-	Value: string,
-	Properties: CharacterProperties,
-	Instance: Instance?,
-}
-
 export type CharacterTransform = {
 	Position: UDim2,
 	Size: UDim2,
@@ -44,9 +38,11 @@ export type CharacterTransform = {
 
 -- >> Writer <<
 
---[=[
+--[[
 	@interface WriterPreset
 	@within Writer
+	@ignore
+
 	.PresetName string -- The name of the preset
 
 	.Font Font -- Font used for characters
@@ -66,23 +62,34 @@ export type CharacterTransform = {
 	.PauseAfterPunctuation boolean -- Whether the writer pauses longer after punctuation
 	.WritingAnimation string -- The animation effect played as a character is written
 	.WritingSound string -- The sound effect played as a character is written, as an assetId
-]=]
+]]
 export type WriterPreset = {
 	PresetName: string,
 	Font: Font,
 	FontSize: number,
 	FontSizingType: string,
 	RichText: boolean,
+
 	WrapText: boolean,
-	AbsoluteCharacterWidth: boolean,
-	AbsoluteLineHeight: boolean,
-	Anchor: Vector2,
+	ForceMonospace: boolean,
+	DynamicLineHeight: boolean,
+	ScaleFont: boolean,
 	Tracking: number,
 	LineSpacing: number,
+	HorizontalPadding: number,
+	VerticalPadding: number,
+
 	WritingSpeed: number,
 	PauseAfterPunctuation: boolean,
 	WritingAnimation: string,
 	WritingSound: string,
+}
+
+export type WriterState = {
+	Mounted: boolean,
+	Writing: boolean,
+	Skipped: boolean,
+	Paused: boolean,
 }
 
 export type WriterExitState = "Success" | "Skipped" | "Canceled" | "Destroyed"

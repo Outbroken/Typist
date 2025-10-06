@@ -12,7 +12,7 @@ return function(object: GuiLabel): Animation
 	return {
 		Object = object,
 		Repeat = true,
-		PositionAnchor = object.Position,
+		Anchor = { Position = object.Position },
 		Keyframes = {
 			{
 				Properties = {

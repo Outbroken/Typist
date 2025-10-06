@@ -8,6 +8,8 @@
 -- Animation module with sequencing and more robust timing
 -->>--------------------------------------------<<--
 
+-- TODO: Anchor size like position is currently so it can be processed relatively
+
 -- >> Core Services <<
 
 local TweenService = game:GetService("TweenService")
@@ -87,6 +89,7 @@ end
 function Animator:AddAnimation(animation: {})
 	local newAnimation = animation
 	newAnimation.CreationTime = self.currentTime
+	newAnimation.Anchor = animation.Anchor or {}
 
 	-- Substitute fallback values if needed
 	local newKeyframes = {}
@@ -112,7 +115,7 @@ function Animator:Update(deltaTime: number)
 	self.currentTime += deltaTime
 
 	for index, animation in pairs(self._activeAnimations) do
-		local Object = animation.Object
+		local object = animation.Object
 		local Keyframes = animation.Keyframes
 		local creationTime = animation.CreationTime
 
@@ -131,10 +134,18 @@ function Animator:Update(deltaTime: number)
 		local currentProperties = getAnimationFrame(Keyframes, animationTime)
 
 		for propertyName, propertyValue in pairs(currentProperties) do
-			if propertyName == "Position" and animation.PositionAnchor then
-				Object.Position = animation.PositionAnchor + propertyValue
+			if propertyName == "Position" and animation.Anchor.Position then
+				object.Position = animation.Anchor.Position + propertyValue
+			elseif propertyName == "Size" and animation.Anchor.Size then
+				local anchorSize = animation.Anchor.Size
+				object.Size = UDim2.new(
+					anchorSize.X.Scale,
+					anchorSize.X.Offset * propertyValue,
+					anchorSize.Y.Scale,
+					anchorSize.Y.Offset * propertyValue
+				)
 			else
-				Object[propertyName] = propertyValue
+				object[propertyName] = propertyValue
 			end
 		end
 	end
@@ -150,13 +161,23 @@ end
 
 function Animator:AnchorObject(object, newAnchor)
 	for index, animation in pairs(self._activeAnimations) do
-		if animation.Object == object and animation.PositionAnchor then
-			self._activeAnimations[index].PositionAnchor = newAnchor
+		if animation.Object == object then
+			if animation.Anchor.Position then
+				self._activeAnimations[index].Anchor.Position = newAnchor.Position
+			elseif animation.Anchor.Size then
+				self._activeAnimations[index].Anchor.Size = newAnchor.Size
+			end
+
 			return true
 		end
 	end
 
 	return false
+end
+
+function Animator:Destroy()
+	setmetatable(self, nil)
+	table.clear(self)
 end
 
 return Animator

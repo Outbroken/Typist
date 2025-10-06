@@ -39,16 +39,16 @@ end
 function Style.Apply(character: TextLabel, styleProperties: StyleProperties, Animator: {})
 	if styleProperties.Color then
 		if typeof(styleProperties.Color) == "Color3" then
+			-- If the color is static, apply it like normal
 			character.TextColor3 = styleProperties.Color
 		else
+			-- If it is a dynamic color, create an animator animation
 			local colorProperties = styleProperties.Color.Properties
 			local styleKeyframes = styleProperties.Color.Keyframes
 
-			local animatorKeyframes = {
-				{
-					Properties = { TextColor3 = Color3.new(1, 1, 1) },
-				},
-			}
+			local animatorKeyframes = { {
+				Properties = { TextColor3 = Color3.new(1, 1, 1) },
+			} }
 
 			local currentTime = 0
 			for _, color in pairs(styleKeyframes) do
